@@ -41,12 +41,12 @@ def train_5fold(
     dataset_dir: str = 'dataset',
     split_csv: str = 'encounter_5folds.csv', 
     batch_size: int      = 256,
-    epochs: int          = 30,
+    epochs: int          = 100,
     lr: float            = 1e-3,
     hidden_dim: int      = 128,
     num_layers: int      = 2,
     dropout: float       = 0.3,
-    output_dir: str      = 'output'
+    output_dir: str      = 'models'
 ):
     os.makedirs(output_dir, exist_ok=True)
     device    = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -66,7 +66,7 @@ def train_5fold(
         train_loader = make_balanced_train_loader(train_ds, batch_size=batch_size, num_bins=10)
         val_loader   = DataLoader(val_ds,   batch_size=batch_size, num_workers=4, pin_memory=True, prefetch_factor=2)
 
-        model     = AttentionBiLSTM(input_dim=2, hidden_dim=hidden_dim,
+        model     = AttentionBiLSTM(input_dim=4, hidden_dim=hidden_dim,
                                     num_layers=num_layers, dropout=dropout).to(device)
         optimizer = optim.Adam(model.parameters(), lr=lr)
 
@@ -106,7 +106,7 @@ def train_5fold(
             # -- save best model on val --
             if vloss < best_val_loss:
                 best_val_loss = vloss
-                torch.save(model.state_dict(), os.path.join(output_dir, f"best_model_fold{fold}_win{WINDOW_SEC}.pth"))
+                torch.save(model.state_dict(), os.path.join(output_dir, f"4channel_model_fold{fold}_win{WINDOW_SEC}.pth"))
 
             # -- update and save loss plot --
             plt.figure(figsize=(6,4))
@@ -118,7 +118,7 @@ def train_5fold(
             plt.legend()
             plt.grid(True)
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, f'loss_curve_fold{fold}_win{WINDOW_SEC}.png'))
+            plt.savefig(os.path.join(output_dir, f'4channel_loss_curve_fold{fold}_win{WINDOW_SEC}.png'))
             plt.close()
 
         # -- final test evaluation --

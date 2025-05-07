@@ -10,7 +10,7 @@ from scipy.signal import butter, filtfilt, resample
 
 FS_ORIG    = 86    # 原始采样率
 FS_TARGET  = 25    # 下采样率 (Hz)
-WINDOW_SEC = 6
+WINDOW_SEC = 10
 SLIDE_SEC  = 1
 EPS        = 1e-6  # 防除零
 CUTOFF     = 12
@@ -18,6 +18,11 @@ CUTOFF     = 12
 def lowpass_filter(x, cutoff, fs, order=4):
     nyq = 0.5 * fs
     b, a = butter(order, cutoff/nyq, btype='low')
+    return filtfilt(b, a, x)
+
+def highpass_filter(x, cutoff, fs, order=4):
+    nyq = 0.5 * fs
+    b, a = butter(order, cutoff/nyq, btype='high')
     return filtfilt(b, a, x)
 
 class PPGRegressionDataset(Dataset):
@@ -61,59 +66,59 @@ class PPGRegressionDataset(Dataset):
             red_flat = red_arr.reshape(-1)
             ir_flat  = ir_arr.reshape(-1)
 
+            mean_r, std_r = red_flat.mean(), red_flat.std(ddof=0)
+            mean_i, std_i = ir_flat .mean(), ir_flat .std(ddof=0)
+            red_flat = (red_flat - mean_r) / (std_r + EPS)
+            ir_flat  = (ir_flat  - mean_i) / (std_i + EPS)
+
             # 3) 低通滤波 
             red_flat = lowpass_filter(red_flat, cutoff=CUTOFF, fs=FS_ORIG)
             ir_flat  = lowpass_filter(ir_flat,  cutoff=CUTOFF, fs=FS_ORIG)
 
             red_dc = lowpass_filter(red_flat, cutoff=0.5, fs=FS_ORIG)
             ir_dc  = lowpass_filter(ir_flat,  cutoff=0.5, fs=FS_ORIG)
+            red_ac = highpass_filter(red_flat, cutoff=0.5, fs=FS_ORIG)
+            ir_ac  = highpass_filter(ir_flat,  cutoff=0.5, fs=FS_ORIG)
 
-            # 4) 分离 AC && 构造比值特征 AC/DC
-            red_ac   = red_flat - red_dc
-            ir_ac    = ir_flat  - ir_dc
-            red_feat = red_ac  / (red_dc  + EPS)
-            ir_feat  = ir_ac   / (ir_dc   + EPS)
-
-            # 5) 下采样到 FS_TARGET
-            n_orig = red_feat.shape[0]
             n_tgt  = int(secs * FS_TARGET)
-            red_ds = resample(red_feat, n_tgt)
-            ir_ds  = resample(ir_feat,  n_tgt)
-
-            # 6) 处理 spo2 → 每秒取平均，再重复到 sample 级，
-            #    下采样则直接 repeat FS_TARGET 次
+            red_ac_ds = resample(red_ac, n_tgt)
+            red_dc_ds = resample(red_dc, n_tgt)
+            ir_ac_ds  = resample(ir_ac,  n_tgt)
+            ir_dc_ds  = resample(ir_dc,  n_tgt)
             if spo2.ndim > 1:
                 spo2_sec = np.nanmean(spo2, axis=1)
             else:
                 spo2_sec = spo2.copy()
             spo2_ds = np.repeat(spo2_sec, FS_TARGET)
 
-            # 7) 三条曲线长度校验
-            assert len(red_ds) == len(ir_ds) == len(spo2_ds), (
-                f"Length mismatch: {len(red_ds)}, {len(ir_ds)}, {len(spo2_ds)}"
+            # 三者长度校验
+            assert len(red_ac_ds)==len(red_dc_ds)==len(ir_ac_ds)==len(ir_dc_ds)==len(spo2_ds), (
+                f"Length mismatch: {len(red_ac_ds)}, {len(spo2_ds)}"
             )
-            n = len(red_ds)
+            n = len(spo2_ds)
 
-            # 8) 滑动窗口
+            # 滑动窗口
             for start in range(0, n - win_len + 1, slide):
-                end   = start + win_len
-                seg_r = red_ds[start:end]
-                seg_i = ir_ds[start:end]
-                seg_o = spo2_ds[start:end]
-
-                # 丢掉含 NaN 的窗口
-                if np.isnan(seg_r).any() or np.isnan(seg_i).any() or np.isnan(seg_o).any():
+                end = start + win_len
+                segs = [
+                    red_ac_ds[start:end],
+                    red_dc_ds[start:end],
+                    ir_ac_ds[start:end],
+                    ir_dc_ds[start:end],
+                ]
+                # 如果含 NaN 就跳过
+                if any(np.isnan(s).any() for s in segs) or np.isnan(spo2_ds[start:end]).any():
                     continue
 
-                # 合成 (win_len,2) 输入，目标 y∈[0,1]
-                seq    = np.stack([seg_r, seg_i], axis=1).astype(np.float32)
-                target = float(seg_o.mean() / 100.0)
+                # stack 成 (win_len, 4)
+                seq    = np.stack(segs, axis=1).astype(np.float32)
+                target = float(spo2_ds[start:end].mean() / 100.0)
 
                 self.X.append(seq)
                 self.y.append(target)
 
         # 转成 Tensor
-        self.X = torch.from_numpy(np.stack(self.X))  # (N, win_len, 2)
+        self.X = torch.from_numpy(np.stack(self.X))  # (N, win_len, 4)
         self.y = torch.tensor(self.y).float()         # (N,)
 
     def __len__(self):
