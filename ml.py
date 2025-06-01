@@ -7,7 +7,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 from torch.utils.data import DataLoader
-from model import AttentionBiLSTM, PPGRegressionDataset,WINDOW_SEC  # Ensure imports
+from model import AttentionBiLSTM, PPGRegressionDataset,WINDOW_SEC, TransformerRegressor,CNNBaseline,BiLSTM,TCNBaseline
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 def make_balanced_train_loader(train_ds, batch_size=64, num_bins=10):
@@ -66,8 +66,16 @@ def train_5fold(
         train_loader = make_balanced_train_loader(train_ds, batch_size=batch_size, num_bins=10)
         val_loader   = DataLoader(val_ds,   batch_size=batch_size, num_workers=4, pin_memory=True, prefetch_factor=2)
 
-        model     = AttentionBiLSTM(input_dim=4, hidden_dim=hidden_dim,
-                                    num_layers=num_layers, dropout=dropout).to(device)
+        model     = AttentionBiLSTM(input_dim=2, hidden_dim=hidden_dim,num_layers=num_layers, dropout=dropout).to(device)
+        # model = TCNBaseline(
+        #     input_dim=2,             # 与 BiLSTM 的 input_dim=2 对应
+        #     tcn_channels=[64, 128],  # 两层 TCN：第一层 64 通道、第二层 128 通道
+        #     kernel_size=3,           # 卷积核大小
+        #     dropout=0.3              # dropout 概率
+        # ).to(device)
+        # model = TransformerRegressor(input_dim=2,d_model=hidden_dim,
+        #                              nhead=4,num_layers=num_layers,dim_feedforward=hidden_dim,dropout=dropout).to(device)
+        # model=CNNBaseline(input_dim=2).to(device)
         optimizer = optim.Adam(model.parameters(), lr=lr)
 
         train_losses = []
@@ -81,6 +89,8 @@ def train_5fold(
             tloss = 0.0
             # for Xb, yb in tqdm(train_loader, desc=f"Fold {fold} Ep{ep} Train", leave=False):
             for Xb, yb in train_loader:
+                assert not torch.isnan(Xb).any() and not torch.isinf(Xb).any(), "Found bad X!"
+                assert not torch.isnan(yb).any() and not torch.isinf(yb).any(), "Found bad y!"
                 Xb, yb = Xb.to(device), yb.to(device)
                 optimizer.zero_grad()
                 out = model(Xb).squeeze(1)
@@ -106,7 +116,7 @@ def train_5fold(
             # -- save best model on val --
             if vloss < best_val_loss:
                 best_val_loss = vloss
-                torch.save(model.state_dict(), os.path.join(output_dir, f"4channel_model_fold{fold}_win{WINDOW_SEC}.pth"))
+                torch.save(model.state_dict(), os.path.join(output_dir, f"25hz_lstm_att_fold{fold}_win{WINDOW_SEC}.pth"))
 
             # -- update and save loss plot --
             plt.figure(figsize=(6,4))
@@ -118,7 +128,7 @@ def train_5fold(
             plt.legend()
             plt.grid(True)
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, f'4channel_loss_curve_fold{fold}_win{WINDOW_SEC}.png'))
+            plt.savefig(os.path.join(output_dir, f'25hz_lstm_att_curve_fold{fold}_win{WINDOW_SEC}.png'))
             plt.close()
 
         # -- final test evaluation --
@@ -134,5 +144,6 @@ def train_5fold(
 
 # Run training
 if __name__ == '__main__':
+    print('25hz_lstm_att')
     train_5fold()
 
